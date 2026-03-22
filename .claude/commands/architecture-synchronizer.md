@@ -1,290 +1,293 @@
 ---
 name: architecture-synchronizer
 description: >
-  Hierarchy consistency enforcer. Scans .claude/templates/, .claude/skills/, and .claude/commands/
-  at runtime, detects broken or missing links in the Command → Skill → Template chain, and
-  proposes targeted fixes. Solves the drift problem where commands forget new skills and skills
-  forget new templates. Always runs in plan mode first — never edits files without user approval.
+  Plugin-management tool for keeping local .claude/ entities in sync with the ochako222/oleks-toolkit
+  plugin. Two modes: Mode A pulls new/updated plugin entities into local .claude/; Mode B removes
+  local files that shadow plugin files so the plugin version takes effect. Always runs in plan mode
+  first — never edits files without user approval.
 disable-model-invocation: true
 ---
 
 # Architecture Synchronizer
 
-You are `/architecture-synchronizer` — a consistency enforcer for the `.claude/` hierarchy. You detect gaps where the Command → Skill → Template chain has broken or missing links, then propose targeted patches. **You never edit files without user approval — always present the gap report first.**
+You are `/architecture-synchronizer` — a plugin-management tool for the `.claude/` hierarchy. You manage the relationship between local `.claude/` entities and the `ochako222/oleks-toolkit` plugin, preventing the silent shadowing that occurs when local files duplicate plugin files.
 
-## Hierarchy Model
-
-```
-Command (.claude/commands/)
-  └── references Skills (.claude/skills/)
-        └── references Templates (.claude/templates/)
-```
-
-A "gap" is any missing link in this chain:
-
-| Gap type | Description |
-|----------|-------------|
-| **Template orphan** | A template exists but no skill's `Templates` section lists it |
-| **Skill orphan** | A skill exists but no command references or invokes it |
-| **Stale skill ref** | A command references a skill that no longer exists in `.claude/skills/` |
-| **Stale template ref** | A skill references a template that no longer exists in `.claude/templates/` |
+**You never edit or delete files without user approval — always present a report first and enter Plan Mode before any changes.**
 
 ---
 
-## Flow
+## Entry Point
 
-### Step 0: Gather Context (MANDATORY — ALWAYS FIRST)
+When the user fires `/architecture-synchronizer`, immediately ask using `AskUserQuestion`:
 
-Read **`CLAUDE.md`** at the project root to understand the repository structure, module prefixes, and the role of each entity type.
+> "Which mode?"
+> - **Mode A — Sync**: Pull new/updated plugin entities into the local `.claude/` folder
+> - **Mode B — Clean**: Remove local files that duplicate plugin files (so the plugin version wins)
 
-Also read the claude-skill-builder command if present at `.claude/commands/claude-skill-builder.md` — it defines the authoritative hierarchy rules (Command → Skill → Template, naming conventions, what each entity type is for).
+Wait for the user's selection, then execute the corresponding mode below.
 
 ---
 
-### Step 1: Discover All Entities Dynamically
+## Mode A: Sync (Pull plugin → local)
 
-Use Glob to collect every entity at runtime. **Do not hardcode any names.**
+**Goal:** Bring the local `.claude/` up to date with what's in the plugin. Handles both missing entities (plugin has it, local doesn't) and outdated entities (plugin version differs from local).
 
-**Templates:**
+### Step A-1: Discover Plugin Entities
+
+Use `mcp__github__get_file_contents` to read entity paths from `ochako222/oleks-toolkit` on branch `main`. Fetch the directory listings for each entity type:
+
+- `ochako222/oleks-toolkit` → `.claude/agents/`
+- `ochako222/oleks-toolkit` → `.claude/commands/`
+- `ochako222/oleks-toolkit` → `.claude/skills/`
+- `ochako222/oleks-toolkit` → `.claude/templates/`
+
+For each entity found, also fetch its content via `mcp__github__get_file_contents` so you can compare it with the local version.
+
+### Step A-2: Discover Local Entities
+
+Use Glob to collect every local entity:
+
 ```
+.claude/agents/*.md
+.claude/commands/*.md
+.claude/skills/*/SKILL.md
 .claude/templates/*.md
 ```
-Extract each template's name from its filename (strip `.md`). Read each template's frontmatter (`name`, `description`) to understand its purpose.
 
-**Skills:**
-```
-.claude/skills/*/SKILL.md
-```
-Extract each skill's name from its directory name. Read each `SKILL.md` fully to extract:
-- The `## Templates` section — what templates does this skill currently reference?
-- The skill's `description` / `## When to Invoke` — what is this skill's domain?
+Read each local file's content using the Read tool.
 
-**Commands:**
-```
-.claude/commands/*.md
-```
-Extract each command's name from its filename. Read each command file fully to extract:
-- All skill names referenced (look for `/skill-name` invocations, skill names in tables, `Invoke` columns, `invoke the relevant skill` instructions)
-- The command's `description` — what is this command's purpose?
+### Step A-3: Classify Each Plugin Entity
 
----
+For each entity found in the plugin, classify it:
 
-### Step 2: Build the Expected Wiring Map
+| Status | Condition |
+|--------|-----------|
+| `IN_SYNC` | Exists locally with identical content |
+| `UPDATE` | Exists locally but content differs |
+| `ADD` | Does not exist locally |
 
-Using the names and descriptions collected in Step 1, infer the **expected** links:
+### Step A-4: Enter Plan Mode
 
-**Expected Template → Skill wiring:**
+**Call `EnterPlanMode` before presenting any findings.**
 
-For each template, determine which skill(s) should reference it by matching:
-1. **Name prefix match** — a template named `frontend-hoc-pattern` should be referenced by skill `frontend-pattern-advisor` (same module prefix, semantically related)
-2. **Description match** — read the template's description and the skill's `## When to Invoke` / `description` — if the template describes a pattern the skill enforces, it should be wired
-3. **Cross-reference** — if a skill's instructions say "follow the pattern in X template" but X is not in the `## Templates` section, that is a gap
+### Step A-5: Present Sync Report
 
-**Expected Skill → Command wiring:**
-
-For each skill, determine which command(s) should reference it by matching:
-1. **Module prefix match** — a `frontend-*` skill should be referenced by commands that handle frontend work
-2. **Functional overlap** — if a command's description says it helps with "frontend code quality" and a `frontend-*` skill exists that enforces quality rules, the command should reference the skill
-3. **Explicit invocation** — if a command's flow says "invoke the relevant skill" without naming specific skills, it may be missing skill references
-
----
-
-### Step 3: Check Actual Wiring
-
-Compare expected wiring (Step 2) against what was actually found (Step 1):
-
-**For each template:**
-- Is it listed in at least one skill's `## Templates` section?
-- If not → **Template orphan gap**
-
-**For each skill:**
-- Is it referenced (by name or `/skill-name` invocation) in at least one command?
-- If not → **Skill orphan gap**
-
-**For each command's skill references:**
-- Does each referenced skill actually exist in `.claude/skills/`?
-- If a referenced skill is missing → **Stale skill reference gap**
-
-**For each skill's template references:**
-- Does each referenced template actually exist in `.claude/templates/`?
-- If a referenced template is missing → **Stale template reference gap**
-
-Record every gap with:
-- Gap type
-- Entity with the gap (file path)
-- What is missing or stale
-- Suggested fix
-
----
-
-### Step 4: Enter Plan Mode
-
-**Before presenting any findings, call `EnterPlanMode`.**
-
-All output from this point is a proposal. Never exit plan mode automatically — wait for the user to approve specific fixes.
-
----
-
-### Step 5: Present the Gap Report
-
-Output a structured report with four sections. Use this format:
-
----
-
-## Synchronization Gap Report
-
-> **Templates discovered**: N
-> **Skills discovered**: N
-> **Commands discovered**: N
-> **Total gaps found**: N
-
----
-
-### Section A — Template Orphans
-*Templates that exist but are not referenced by any skill*
-
-| Template | Expected owning skill | Suggested fix |
-|----------|-----------------------|---------------|
-| `frontend-hoc-pattern` | `frontend-pattern-advisor` | Add to skill's `## Templates` section |
-| `frontend-zustand-store` | `frontend-state-manager` | Add to skill's `## Templates` section |
-
-**Count**: N orphaned templates
-
-If none: *All templates are referenced by at least one skill.*
-
----
-
-### Section B — Skill Orphans
-*Skills that exist but are not referenced by any command*
-
-| Skill | Expected owning command(s) | Suggested fix |
-|-------|---------------------------|---------------|
-| `frontend-performance-optimizer` | `architecture-scanner`, `codder` | Add skill reference to command's skill table |
-| `frontend-page-architector` | `codder` | Add to codder's Available Skills Reference table |
-
-**Count**: N orphaned skills
-
-If none: *All skills are referenced by at least one command.*
-
----
-
-### Section C — Stale Skill References
-*Commands that reference skills which no longer exist*
-
-| Command | Stale reference | Suggested fix |
-|---------|----------------|---------------|
-| `codder` | `/frontend-old-service` | Remove stale reference — skill no longer exists |
-
-**Count**: N stale skill references
-
-If none: *All command skill references are valid.*
-
----
-
-### Section D — Stale Template References
-*Skills that reference templates which no longer exist*
-
-| Skill | Stale reference | Suggested fix |
-|-------|----------------|---------------|
-| `frontend-state-manager` | `frontend-old-context` | Remove stale reference — template no longer exists |
-
-**Count**: N stale template references
-
-If none: *All skill template references are valid.*
-
----
-
-## Summary
-
-| Section | Gaps found |
-|---------|-----------|
-| A — Template orphans | N |
-| B — Skill orphans | N |
-| C — Stale skill refs | N |
-| D — Stale template refs | N |
-| **Total** | **N** |
-
-**Priority fix**: [The single most impactful gap to resolve first — e.g., "5 template orphans in `frontend-state-manager` mean the skill is missing its full ruleset"]
-
----
-
-### Step 6: Ask Which Gaps to Fix
-
-After presenting the report, ask the user using `AskUserQuestion`:
-
-> "Which gaps would you like me to fix?"
-
-Options:
-- **Fix all gaps automatically** — Apply all suggested fixes across all sections
-- **Fix a specific section** — User picks Section A, B, C, or D
-- **Fix a specific gap** — User describes which one; apply just that fix
-- **Done — report only** — No changes needed; exit
-
----
-
-### Step 7: Apply Fixes
-
-For each approved fix, edit the relevant file:
-
-**Fixing a Template Orphan (Section A):**
-
-Open the expected owning skill's `SKILL.md`. Find the `## Templates` section. If it doesn't exist, add it at the bottom. Add a row to the table:
+Output a structured report grouped by category:
 
 ```
-| `<template-name>` | `.claude/templates/<template-name>.md` |
+## Sync Report — Plugin → Local
+
+### Agents
+| Entity | Status | Action |
+|--------|--------|--------|
+| example-agent | IN_SYNC | — |
+| new-agent      | ADD     | Will create .claude/agents/new-agent.md |
+
+### Commands
+| Entity | Status | Action |
+|--------|--------|--------|
+| codder | UPDATE | Will overwrite local version |
+
+### Skills
+| Entity | Status | Action |
+|--------|--------|--------|
+| frontend-vitest-rtl  | IN_SYNC | — |
+| frontend-new-skill   | ADD     | Will create .claude/skills/frontend-new-skill/SKILL.md |
+| frontend-scss-writer | UPDATE  | Will overwrite local version |
+
+### Templates
+| Entity | Status | Action |
+|--------|--------|--------|
+| frontend-hoc-pattern | IN_SYNC | — |
+
+---
+Summary: N in sync, N to add, N to update
 ```
 
-If the skill has no `## Templates` section at all, add:
+Show all four sections even if a section is empty — a clean section confirms that area is in sync.
 
-```markdown
-## Templates
+### Step A-6: Ask Permission
 
-| Template | Location |
-|----------|----------|
-| `<template-name>` | `.claude/templates/<template-name>.md` |
+Ask the user using `AskUserQuestion`:
+
+> "Apply all changes? Or pick specific entities?"
+> - **All changes** — Apply all ADDs and UPDATEs
+> - **Only ADD entities** — Add missing only, skip updates
+> - **Only UPDATE entities** — Update existing only, skip additions
+> - **Pick specific by name** — User specifies which entities to apply
+> - **Done** — Report only, no changes
+
+### Step A-7: Apply
+
+Use the Write tool to create or overwrite local files with the plugin content fetched in Step A-1:
+
+- Agents: `.claude/agents/<name>.md`
+- Commands: `.claude/commands/<name>.md`
+- Skills: `.claude/skills/<name>/SKILL.md` (create the directory if it doesn't exist)
+- Templates: `.claude/templates/<name>.md`
+
+### Step A-8: Commit and Push
+
+After writing files, commit the changes to the local repo and mirror them to the plugin repository:
+
+1. **Stage changed files:**
+   ```bash
+   git add .claude/agents/ .claude/commands/ .claude/skills/ .claude/templates/
+   ```
+
+2. **Commit locally:**
+   ```bash
+   git commit -m "chore: sync plugin entities from ochako222/oleks-toolkit
+
+   Added: N | Updated: N | Skipped: N
+
+   Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+   ```
+
+3. **Push plugin mirror** — use `mcp__github__create_or_update_file` to write each ADD/UPDATE file back to `ochako222/oleks-toolkit` on branch `main` with the same content, so the plugin repo stays the authoritative source.
+
+4. **Confirm:**
+   > "Sync complete. Added: N. Updated: N. Skipped: N. Committed locally and pushed to plugin repo."
+
+---
+
+## Mode B: Clean (Remove local duplicates)
+
+**Goal:** Delete local `.claude/` files whose names match plugin files, so the plugin version takes effect automatically (no more shadowing).
+
+### Step B-1: Discover Plugin Entity Names
+
+First attempt to discover plugin entities from the locally installed plugin at:
+
+```
+~/.claude/plugins/marketplaces/oleks-toolkit/.claude/
 ```
 
-**Fixing a Skill Orphan (Section B):**
+Use Glob on each subdirectory:
 
-Open the expected owning command's `.md` file. Find the section where skills are listed (look for a table with columns like `Skill | Invoke | Purpose` or `Skill | Use When`). Add a row for the missing skill.
+```
+~/.claude/plugins/marketplaces/oleks-toolkit/.claude/agents/*.md
+~/.claude/plugins/marketplaces/oleks-toolkit/.claude/commands/*.md
+~/.claude/plugins/marketplaces/oleks-toolkit/.claude/skills/*/SKILL.md
+~/.claude/plugins/marketplaces/oleks-toolkit/.claude/templates/*.md
+```
 
-If the command has no skills table, find the most appropriate location in the flow (typically in "Load Module Skills" or "Available Skills Reference" sections) and add the skill with its name, `/invoke` path, and a one-line purpose derived from the skill's own description.
+Extract entity **names only** (no need to read file content):
+- For agents/commands/templates: strip the `.md` extension from the filename
+- For skills: use the directory name
 
-**Fixing a Stale Skill Reference (Section C):**
+**If the local plugin directory is not found**, fall back to GitHub via `mcp__github__get_file_contents` from `ochako222/oleks-toolkit` on branch `main` to get the entity name list.
 
-Open the command file. Find the line or table row referencing the stale skill name. Remove it entirely.
+### Step B-2: Discover Local Entities
 
-**Fixing a Stale Template Reference (Section D):**
+Use Glob to collect every local entity (same four patterns as Mode A). Read file names only — no need to read content.
 
-Open the skill's `SKILL.md`. Find the `## Templates` table row referencing the stale template. Remove that row.
+### Step B-3: Find Conflicts
 
-After all fixes are applied, confirm to the user:
+Compare local entity names against plugin entity names. Classify each local file:
 
-> "Fixed N gaps. Re-run `/architecture-synchronizer` to verify the hierarchy is fully in sync."
+| Local file | Plugin match | Classification |
+|---|---|---|
+| `.claude/skills/frontend-vitest-rtl/SKILL.md` | `skills/frontend-vitest-rtl` | **CONFLICT** — will delete |
+| `.claude/commands/codder.md` | `commands/codder` | **CONFLICT** — will delete |
+| `.claude/commands/my-custom-cmd.md` | _(none)_ | **LOCAL-ONLY** — keep |
+
+### Step B-4: Enter Plan Mode
+
+**Call `EnterPlanMode` before presenting any findings.**
+
+### Step B-5: Present Conflict Report
+
+Output a structured report:
+
+```
+## Conflict Report — Local vs Plugin
+
+These local files shadow the plugin and will be deleted:
+
+| File | Type |
+|------|------|
+| .claude/skills/frontend-vitest-rtl/SKILL.md | Skill |
+| .claude/commands/codder.md | Command |
+
+These local files have no plugin counterpart and will be kept:
+
+| File | Type |
+|------|------|
+| .claude/commands/my-custom-cmd.md | Command |
+| .claude/commands/architecture-synchronizer.md | Command |
+
+Conflicts to remove: N | Local-only (safe): N
+```
+
+Show both tables so the user can verify nothing important gets missed.
+
+### Step B-6: Ask Permission
+
+Ask the user using `AskUserQuestion`:
+
+> "Delete all N conflicting files? Or pick which to remove?"
+> - **Delete all conflicts** — Remove all N files listed above
+> - **Pick specific by name** — User specifies which files to delete
+> - **Done** — Report only, no deletions
+
+Display this warning prominently:
+
+> **Warning:** After deletion, plugin versions will be used automatically. This cannot be undone without `/synchronize` pull or `git restore`.
+
+### Step B-7: Apply
+
+Use Bash `rm` to delete each approved file:
+
+```bash
+rm .claude/commands/<name>.md
+rm .claude/agents/<name>.md
+rm .claude/templates/<name>.md
+rm .claude/skills/<name>/SKILL.md
+```
+
+For skills (in subdirectories): after removing `SKILL.md`, check if the skill directory is now empty. If empty, remove the directory too:
+
+```bash
+rmdir .claude/skills/<name>
+```
+
+### Step B-8: Commit and Push
+
+After deletions, commit the removal to the local repo and mirror it to the plugin repository:
+
+1. **Stage removals:**
+   ```bash
+   git add -u .claude/agents/ .claude/commands/ .claude/skills/ .claude/templates/
+   ```
+
+2. **Commit locally:**
+   ```bash
+   git commit -m "chore: remove local shadows of plugin entities
+
+   Removed N conflicting files — plugin versions now active.
+
+   Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+   ```
+
+3. **No plugin push needed** — Mode B only removes local files; the plugin repo is unaffected.
+
+4. **Confirm:**
+   > "Removed N files. Plugin versions now active. Changes committed."
 
 ---
 
 ## Rules
 
-- **Always discover entities dynamically** — read `.claude/skills/`, `.claude/templates/`, `.claude/commands/` at runtime; never hardcode names
-- **Always enter plan mode before presenting findings** — call `EnterPlanMode` before the gap report
-- **Never edit files without user approval** — the report is a proposal; fixes only happen after Step 6
-- **Infer expected wiring by name prefix + semantic match** — do not require exact string matching; use judgment when a template clearly belongs to a skill
-- **Do not over-wire** — a skill should not reference a template it doesn't actually use; only add links that are genuinely relevant
-- **Stale references are higher priority than orphans** — broken links cause errors; missing links cause incompleteness
-- **Report all four sections even if empty** — a clean section confirms that area is healthy
-- **Do not restructure skills or commands beyond adding/removing references** — this command patches wiring only, not content
-- **One fix per entity per run** — if a skill needs 3 templates added, add all 3 in one edit operation
-
----
-
-## Module Prefix Reference
-
-Use this to infer expected wiring when names don't make it obvious:
-
-| Prefix | Module | Relevant commands |
-|--------|--------|-------------------|
-| `frontend-` | React frontend (`frontend/`) | `codder`, `architecture-scanner` |
-| `backend-` | Python Flask API (`backend/`) | `codder` |
-| `e2e-` / `playwright-` | E2E tests (`e2e/`) | `codder` |
-| `architecture-` | Cross-cutting / meta | `claude-skill-builder` |
+- **Always ask which mode first** — Mode A or Mode B; do not combine them in one run
+- **Always enter Plan Mode before presenting any report** — call `EnterPlanMode` before showing findings
+- **Never delete or write files without user approval** — all findings are proposals until the user confirms
+- **Always commit and push after applying changes** — no approval needed; commit + push is automatic after the user approves the apply step
+- **Mode A uses GitHub API** — always fetches the latest plugin version from `ochako222/oleks-toolkit` on `main`
+- **Mode A pushes back to the plugin repo** — after writing local files, mirror each ADD/UPDATE to `ochako222/oleks-toolkit` via `mcp__github__create_or_update_file`
+- **Mode B does not push to the plugin repo** — it only removes local shadows; the plugin is unaffected
+- **Mode B uses locally installed plugin for discovery** — fast, no network; falls back to GitHub if the plugin directory is not found
+- **Skills live in subdirectories** — when deleting a skill, remove `SKILL.md` first, then `rmdir` if empty; when writing a skill, ensure the directory exists first
+- **Show the "Local-only (safe)" list in Mode B** — users must be able to verify their custom entities are not at risk
+- **Do not combine modes** — one mode per invocation; if the user wants both, they must run the command twice
+- **IN_SYNC entities in Mode A require no action** — do not overwrite files whose content is already identical to the plugin version
