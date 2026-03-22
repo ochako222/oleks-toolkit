@@ -15,7 +15,10 @@
         "name": "Oleksandr",
         "email": "ochako222@github.com"
       },
-      "source": ".",
+      "source": {
+        "source": "github",
+        "repo": "ochako222/oleks-toolkit"
+      },
       "category": "development",
       "homepage": "https://github.com/ochako222/oleks-toolkit"
     }
