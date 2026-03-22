@@ -1,0 +1,19 @@
+{
+  "name": "oleksandr-toolkit",
+  "version": "1.0.0",
+  "description": "Claude Code plugin — agents, commands, skills, and templates for full-stack React + Flask development",
+  "claude": {
+    "type": "plugin",
+    "version": "1",
+    "name": "oleksandr-toolkit",
+    "description": "Reusable Claude Code entities for full-stack development: 6 agents, 5 commands, 15 skills, 15 templates covering React frontend, Python Flask backend, and Playwright E2E testing.",
+    "entities": {
+      "agents": 6,
+      "commands": 5,
+      "skills": 15,
+      "templates": 15
+    }
+  },
+  "keywords": ["claude-code", "plugin", "react", "flask", "playwright", "vitest", "typescript"],
+  "license": "MIT"
+}
