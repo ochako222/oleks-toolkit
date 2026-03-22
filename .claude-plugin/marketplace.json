@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "oleks-toolkit",
+  "description": "Reusable Claude Code entities for full-stack React + Flask development. Includes agents, commands, skills, and templates covering React frontend, Python Flask backend, and Playwright E2E testing.",
+  "owner": {
+    "name": "Oleksandr",
+    "email": "ochako222@github.com"
+  },
+  "plugins": [
+    {
+      "name": "oleksandr-toolkit",
+      "version": "1.0.0",
+      "description": "Reusable Claude Code entities for full-stack React + Flask development. Includes 6 agents, 5 commands (including /synchronize for bidirectional plugin sync), 15 skills, and 15 templates covering React frontend, Python Flask backend, and Playwright E2E testing.",
+      "author": {
+        "name": "Oleksandr",
+        "email": "ochako222@github.com"
+      },
+      "source": ".",
+      "category": "development",
+      "homepage": "https://github.com/ochako222/oleks-toolkit"
+    }
+  ]
+}
