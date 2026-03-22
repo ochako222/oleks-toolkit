@@ -1,0 +1,13 @@
+{
+  "name": "oleksandr-toolkit",
+  "version": "1.0.0",
+  "description": "Reusable Claude Code entities for full-stack React + Flask development. Includes 6 agents, 5 commands (including /synchronize for bidirectional plugin sync), 15 skills, and 15 templates covering React frontend, Python Flask backend, and Playwright E2E testing.",
+  "author": {
+    "name": "Oleksandr",
+    "email": "ochako222@github.com"
+  },
+  "homepage": "https://github.com/ochako222/oleks-toolkit",
+  "repository": "https://github.com/ochako222/oleks-toolkit",
+  "license": "MIT",
+  "keywords": ["react", "flask", "playwright", "vitest", "typescript", "frontend", "backend", "e2e", "testing"]
+}
